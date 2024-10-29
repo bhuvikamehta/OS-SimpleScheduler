@@ -14,6 +14,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <sys/syslimits.h>
+#include <ctype.h>
 
 #define MAX_PROCESSES 100
 #define MAX_PROGRAM_NAME 256
