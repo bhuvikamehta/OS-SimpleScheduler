@@ -102,7 +102,7 @@ static void manage_SIGINT(int sig_id){
     //     printf("\n");
     //     i++;
     // }
-    printTerminatedQueue(terminated_queue);
+    // printTerminatedQueue(terminated_queue);
     exit(0); //exits after showing detials 
 }
 
