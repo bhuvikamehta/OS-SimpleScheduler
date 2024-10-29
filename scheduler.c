@@ -11,6 +11,9 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <errno.h>
+#include <dirent.h>
+#include <limits.h>
+#include <sys/syslimits.h>
 
 #define MAX_PROCESSES 100
 #define MAX_PROGRAM_NAME 256
@@ -53,26 +56,7 @@ struct TerminatedQueue {
     int rear;
 };
 
-static void manage_SIGINT(int sig_id){
-    printf("\n");
-    int i=0;
-    while(i < scheduler_queue->rear){
-        struct Process command_details = scheduler_queue->processes[i];
 
-        // display the command and process PID
-        printf("%s\nProcess PID: %d", command_details.command, command_details.pid);
-        printf("\n");
-
-        // display the execution_duration of the process in seconds
-        printf("Process Duration : %lld\n", command_details.total_execution_time);
-        printf("\n");
-
-        printf("Process Waiting Time : %lld\n", command_details.waiting_time);
-        printf("\n");
-        i++;
-    }
-    exit(0); //exits after showing detials 
-}
 
 
 // Function to enqueue a process in the queue
@@ -95,8 +79,32 @@ void printTerminatedQueue(struct TerminatedQueue* queue) {
     for (int i = 0; i <= queue->rear; i++) {
 
         int waiting_time = ((queue->processes[i].end_time.tv_sec - queue->processes[i].start_time.tv_sec) * 1000) + ((queue->processes[i].end_time.tv_usec - queue->processes[i].start_time.tv_usec) / 1000);
+        printf("Terminated process %s with PID: %d \n Execution Time: %lld ms \n Waiting Time: %lld \n",
+            queue->processes[i].command,queue->processes[i].pid,queue->processes[i].total_execution_time, queue->processes[i].waiting_time);
         printf("Terminated Process with PID %d. Execution Time: %lld ms and %lld ms waiting time\n", queue->processes[i].pid, queue->processes[i].total_execution_time, queue->processes[i].waiting_time);
     }
+}
+
+static void manage_SIGINT(int sig_id){
+    printf("\n");
+    // int i=0;
+    // while(i < scheduler_queue->rear){
+    //     struct Process command_details = scheduler_queue->processes[i];
+
+    //     // display the command and process PID
+    //     printf("%s\nProcess PID: %d", command_details.command, command_details.pid);
+    //     printf("\n");
+
+    //     // display the execution_duration of the process in seconds
+    //     printf("Process Duration : %lld\n", command_details.total_execution_time);
+    //     printf("\n");
+
+    //     printf("Process Waiting Time : %lld\n", command_details.waiting_time);
+    //     printf("\n");
+    //     i++;
+    // }
+    printTerminatedQueue(terminated_queue);
+    exit(0); //exits after showing detials 
 }
 
 // Signal handler for child process completion SIGCHILD
@@ -135,6 +143,40 @@ void handleSIGCHLD(int signo) {
         sem_post(&scheduler_queue_sem); // Unlock the scheduler_queue
     }
 }
+int get_pid_by_name(const char *name) {
+    DIR *proc = opendir("/proc");
+    if (proc == NULL) {
+        perror("opendir failed");
+        return -1;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(proc)) != NULL) {
+        if (entry->d_type == DT_DIR && atoi(entry->d_name) > 0) { 
+            char path[PATH_MAX];  // Check if it's a PID directory
+            char  comm[256];
+            snprintf(path, sizeof(path), "/proc/%s/comm", entry->d_name);
+            
+            FILE *fp = fopen(path, "r");
+            if (fp) {
+                fgets(comm, sizeof(comm), fp);
+                fclose(fp);
+
+                // Remove trailing newline from comm
+                comm[strcspn(comm, "\n")] = '\0';
+
+                if (strcmp(name, comm) == 0) {
+                    closedir(proc);
+                    return atoi(entry->d_name); // Return PID as an integer
+                }
+            }
+        }
+    }
+
+    closedir(proc);
+    return -1; // Process not found
+}
+
 
 int main() {
     // Initialize semaphores
@@ -157,7 +199,7 @@ int main() {
 
     // Set up the SIGCHLD signal handler
     if (signal(SIGCHLD, handleSIGCHLD) == SIG_ERR) {
-        perror("signal");
+        printf("failed to setup SIGCHILD handler");        
         exit(1);
     }
 
@@ -200,6 +242,7 @@ int main() {
         exit(1);
     }
     terminated_queue->rear = -1;
+    
 
     // Fork the SimpleScheduler process
     pid_t scheduler_pid = fork();
@@ -375,12 +418,13 @@ int main() {
                     perror("fork");
                     continue;
                 }
-                int pid=atoi(program);
+                // int pid=atoi(program);
+                int piD = get_pid_by_name(program);
                 if (child_pid == 0) {
                     // Child process
                     usleep(TSLICE * 1000);
                     execlp(program, program, NULL);
-                    kill(pid,SIGSTOP);
+                    kill(piD,SIGSTOP);
                     perror("Execution failed");
                     exit(1);
                 } else {
