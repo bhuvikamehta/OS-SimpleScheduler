@@ -1,6 +1,6 @@
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <stdlib.h> //include
+#include <string.h> 
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -13,135 +13,162 @@
 #include <errno.h>
 #include <dirent.h>
 #include <limits.h>
+#include <stdbool.h>
 
-#define MAX_PROCESSES 100
-#define MAX_PROGRAM_NAME 256
+#define MAXIMUM_PROCESSES 100
+#define MAXIMUM_QUEUE_SIZE 100          // Maximum size for process queues
+
+#define MAXIMUM_TERMINATED_PROCESS 100 // Maximum number of terminated processes
+#define MAX_PROGRAM_NAMES 256
+#define MAXIMUM_CPUS 10                 // Maximum number of CPUs available
 
 // Define some global variables
 int NCPU;
 int TSLICE;
-int shmid; // Shared memory ID
+int share_memoryid; // Shared memory ID
 
-sem_t scheduler_sem; // Semaphore for scheduling
-sem_t print_sem;
-sem_t scheduler_queue_sem; // Semaphore for printing
+sem_t sem_sch; // Semaphore for scheduling
+sem_t sem_output;
+sem_t sem_sch_queue; // Semaphore for printing
 
-struct ProcessQueue* scheduler_queue;
-struct ProcessQueue shell_queue;
-struct TerminatedQueue* terminated_queue;
+struct job_queue* ready_queue;
+struct job_queue input_queue;
+struct completed_queue* finished_queue;
 
 // Struct to represent a process
 struct Process {
-    pid_t pid;
-    char command[MAX_PROGRAM_NAME];
-    int state; // 0: Running, 1: Waiting, -1: Finished
-    struct timeval start_time; // Track start time
-    struct timeval end_time;   // Track end time
-    long long total_execution_time;
-    long long waiting_time;
-    int priority;
+    pid_t process_id;
+    char program_name[MAX_PROGRAM_NAMES];
+    int process_state; // 0: Running, 1: Waiting, -1: Finished
+    struct timeval starting_time; // Track start time
+    struct timeval ending_time;   // Track end time
+    long long exec_time;
+    long long wait_time;
+    int process_priority;
 };
 
 // Struct to represent a queue of processes
-struct ProcessQueue {
-    struct Process processes[MAX_PROCESSES];
+struct job_queue {
+    struct Process processes[MAXIMUM_PROCESSES];
     int rear;
 };
 
 
-// Struct for terminated processes
-struct TerminatedQueue {
-    struct Process processes[MAX_PROCESSES];
-    int rear;
-};
-
-
+// // Struct for terminated processes
+// struct completed_queue {
+//     struct Process processes[MAXIMUM_PROCESSES];
+//     int rear;
+// };
 
 
 // Function to enqueue a process in the queue
-void enqueue(struct ProcessQueue* queue, struct Process process) {
-    if (queue->rear == MAX_PROCESSES - 1) {
-        printf("Queue is full.\n");
+void enqueue(struct job_queue* queue, struct Process process) {
+    if (queue->rear == MAXIMUM_PROCESSES - 1) {
+        printf("maximum limit reached");
+        printf("\n");
+        
         return;
     }
-    queue->processes[queue->rear] = process;
+    //queue->processes[queue->rear] = process;
+    struct Process* currentProcess = &queue->processes[queue->rear];
+    *currentProcess = process; 
 }
+
+// Struct for terminated processes
+struct completed_queue {
+    struct Process processes[MAXIMUM_PROCESSES];
+    int rear;
+};
+
+
+// // Signal handler for SIGUSR1 - Used to wake up the scheduler
+// void handleSIGUSR1(int signo) { // Signal the scheduler to wake up
+//     sem_post(&sem_sch);
+// }
+
+// Function to print the terminated process queue
+void printCompletedQueue(struct completed_queue* queue) {
+    int i = 0; 
+    while (i <= queue->rear) {
+        int wait_time = ((queue->processes[i].ending_time.tv_sec - queue->processes[i].starting_time.tv_sec) * 1000) + 
+                         ((queue->processes[i].ending_time.tv_usec - queue->processes[i].starting_time.tv_usec) / 1000);
+        
+        printf("Terminated process %s with PID: %d \n Execution Time: %lld ms \n Waiting Time: %lld \n",
+               queue->processes[i].program_name, queue->processes[i].process_id, 
+               queue->processes[i].exec_time, queue->processes[i].wait_time);
+        
+        i++; 
+    }
+}
+
 
 // Signal handler for SIGUSR1 - Used to wake up the scheduler
 void handleSIGUSR1(int signo) { // Signal the scheduler to wake up
-    sem_post(&scheduler_sem);
-}
-
-// Function to print the terminated process queue
-void printTerminatedQueue(struct TerminatedQueue* queue) {
-
-    for (int i = 0; i <= queue->rear; i++) {
-
-        int waiting_time = ((queue->processes[i].end_time.tv_sec - queue->processes[i].start_time.tv_sec) * 1000) + ((queue->processes[i].end_time.tv_usec - queue->processes[i].start_time.tv_usec) / 1000);
-        printf("Terminated process %s with PID: %d \n Execution Time: %lld ms \n Waiting Time: %lld \n",
-            queue->processes[i].command,queue->processes[i].pid,queue->processes[i].total_execution_time, queue->processes[i].waiting_time);
-        // printf("Terminated Process with PID %d. Execution Time: %lld ms and %lld ms waiting time\n", queue->processes[i].pid, queue->processes[i].total_execution_time, queue->processes[i].waiting_time);
-    }
+    sem_post(&sem_sch);
 }
 
 static void manage_SIGINT(int sig_id){
     printf("\n");
-    // int i=0;
-    // while(i < scheduler_queue->rear){
-    //     struct Process command_details = scheduler_queue->processes[i];
-
-    //     // display the command and process PID
-    //     printf("%s\nProcess PID: %d", command_details.command, command_details.pid);
-    //     printf("\n");
-
-    //     // display the execution_duration of the process in seconds
-    //     printf("Process Duration : %lld\n", command_details.total_execution_time);
-    //     printf("\n");
-
-    //     printf("Process Waiting Time : %lld\n", command_details.waiting_time);
-    //     printf("\n");
-    //     i++;
-    // }
-    printTerminatedQueue(terminated_queue);
+    if (ready_queue == NULL || ready_queue->rear == 0) {
+        printf("No processes to display.\n");
+        exit(0); 
+    }
+    printCompletedQueue(finished_queue);
     exit(0); //exits after showing detials 
 }
-
 // Signal handler for child process completion SIGCHILD
 void handleSIGCHLD(int signo) {
     int status;
-    pid_t pid;
+    pid_t process_id;
 
-    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        sem_wait(&scheduler_queue_sem); // Lock the scheduler_queue
+    while ((process_id = waitpid(-1, &status, WNOHANG)) > 0) {
+        sem_wait(&sem_sch_queue); // Lock the ready_queue
 
         // Find the process in the scheduling queue
-        for (int i = 0; i <= scheduler_queue->rear; i++) {
-            if (scheduler_queue->processes[i].pid == pid) {
-                scheduler_queue->processes[i].state = -1; // Set state to finished
-                gettimeofday(&scheduler_queue->processes[i].end_time, NULL);
-                struct timeval elapsedTime;
-                elapsedTime.tv_sec = scheduler_queue->processes[i].end_time.tv_sec - scheduler_queue->processes[i].start_time.tv_sec;
-                elapsedTime.tv_usec = scheduler_queue->processes[i].end_time.tv_usec - scheduler_queue->processes[i].start_time.tv_usec;
-                long long elapsed = elapsedTime.tv_sec * 1000 + elapsedTime.tv_usec / 1000;
-                scheduler_queue->processes[i].total_execution_time += elapsed;
-                scheduler_queue->processes[i].waiting_time += elapsed;
-                //printf("Process with PID %d set to -1\n", scheduler_queue->processes[i].pid);
+        int i = 0; 
+        while (i <= ready_queue->rear) {
+            if (ready_queue->processes[i].process_id == process_id) {
+                ready_queue->processes[i].process_state = -1; // Set process_state to finished
+                gettimeofday(&ready_queue->processes[i].ending_time, NULL);
+
+                struct timeval duration;
+
+                // duration.tv_sec = ready_queue->processes[i].ending_time.tv_sec - ready_queue->processes[i].starting_time.tv_sec;
+                long endingSeconds = ready_queue->processes[i].ending_time.tv_sec;
+                long startingSeconds = ready_queue->processes[i].starting_time.tv_sec;
+                duration.tv_sec = endingSeconds - startingSeconds;
+                // duration.tv_usec = ready_queue->processes[i].ending_time.tv_usec - ready_queue->processes[i].starting_time.tv_usec;
+                long endingMicroseconds = ready_queue->processes[i].ending_time.tv_usec;
+                long startingMicroseconds = ready_queue->processes[i].starting_time.tv_usec;
+                duration.tv_usec = endingMicroseconds - startingMicroseconds;
+
+                long long elapsed = (duration.tv_sec * 1000) + (duration.tv_usec / 1000);
+                // ready_queue->processes[i].exec_time += elapsed;
+                // ready_queue->processes[i].wait_time += elapsed;
+
+                ready_queue->processes[i].exec_time = ready_queue->processes[i].exec_time + elapsed;
+                ready_queue->processes[i].wait_time = ready_queue->processes[i].wait_time + elapsed;
+
+
                 // Move the process to the terminated queue
-                terminated_queue->rear++;
-                terminated_queue->processes[terminated_queue->rear] = scheduler_queue->processes[i];
+                finished_queue->rear++;
+                finished_queue->processes[finished_queue->rear] = ready_queue->processes[i];
+
                 // Remove the process from the scheduling queue by shifting elements
-                for (int j = i; j < scheduler_queue->rear; j++) {
-                    scheduler_queue->processes[j] = scheduler_queue->processes[j + 1];
+                for (int j = i; j < ready_queue->rear; j++) {
+                    ready_queue->processes[j] = ready_queue->processes[j + 1];
                 }
-                scheduler_queue->rear--;
+                ready_queue->rear--;
                 break;
             }
+            i++; 
         }
-        //printf("Printing terminated queue.....\n");
-        //printTerminatedQueue(terminated_queue);
-        sem_post(&scheduler_queue_sem); // Unlock the scheduler_queue
+        
+        sem_post(&sem_sch_queue); // Unlock the ready_queue
     }
 }
+
+
 int get_pid_by_name(const char *name) {
     DIR *proc = opendir("/proc");
     if (proc == NULL) {
@@ -179,245 +206,293 @@ int get_pid_by_name(const char *name) {
 
 int main() {
     // Initialize semaphores
-    if (sem_init(&scheduler_sem, 0, 0) == -1) {
-        perror("sem_init (scheduler_sem)");
+    if (sem_init(&sem_sch, 0, 0) == -1) {
+        // perror("sem_init (sem_sch)");
+        // exit(1);
+        printf("failed to initialize sem_sch");
+        printf("\n");
         exit(1);
     }
-    if (sem_init(&print_sem, 0, 1) == -1) {
-        perror("sem_init (print_sem)");
+    if (sem_init(& sem_output, 0, 1) == -1) {
+        // perror("sem_init ( sem_output)");
+        // exit(1);
+        printf("failed to initialize sem_output");
+        printf("\n");
         exit(1);
     }
-    if (sem_init(&scheduler_queue_sem, 0, 1) == -1) {
-        perror("sem_init (scheduler_queue_sem)");
+    if (sem_init(&sem_sch_queue, 0, 1) == -1) {
+        // perror("sem_init (sem_sch_queue)");
+        // exit(1);
+        perror("failed to initialize sem_sch_queue");
+        printf("\n");
         exit(1);
     }
     // Setting the function for SIGINT (Ctrl + C)
     if (signal(SIGINT, manage_SIGINT) == SIG_ERR){
-        printf("failed to setup SIGINT handler");
+        //printf("failed to setup SIGINT handler");
+        printf("error setting up SIGINT handler");
+        printf("\n");
     }
 
     // Set up the SIGCHLD signal handler
     if (signal(SIGCHLD, handleSIGCHLD) == SIG_ERR) {
-        printf("failed to setup SIGCHILD handler");        
+        // printf("failed to setup SIGCHILD handler");        
+        // exit(1);
+        printf("error setting up SIGCHILD handler");
+        printf("\n");
         exit(1);
     }
 
-    printf("Enter the number of CPUs: ");
+    printf("Number of CPUs: ");
     scanf("%d", &NCPU);
-    printf("Enter the time quantum (TSLICE) in milliseconds: ");
+    printf("Enter TSLICE (ms): ");
     scanf("%d", &TSLICE);
 
     // Register the SIGUSR1 signal handler
     if (signal(SIGUSR1, (void (*)(int)) handleSIGUSR1) == SIG_ERR) {
-        perror("signal");
+        printf("Error setting up SIGUSR1 handler");
+        printf("\n");
         exit(1);
     }
 
     // Create shared memory for the process queue
-    shmid = shmget(IPC_PRIVATE, sizeof(struct ProcessQueue), 0666 | IPC_CREAT);
-    if (shmid < 0) {
-        perror("shmget");
+    share_memoryid = shmget(IPC_PRIVATE, sizeof(struct job_queue), 0666 | IPC_CREAT);
+    if (share_memoryid < 0) {
+        printf("Error creating shared memory with shmget");
+        printf("\n");
         exit(1);
     }
 
-    scheduler_queue = shmat(shmid, NULL, 0);
+    ready_queue = shmat(share_memoryid, NULL, 0);
 
-    if (scheduler_queue == (void*) -1) {
-        perror("shmat");
+    if (ready_queue == (void*) -1) {
+        printf("Error attaching shared memory with shmat");
+        printf("\n");
         exit(1);
     }
-    scheduler_queue->rear = -1;
+    ready_queue->rear = -1;
+
     // Create shared memory for the terminated queue
-    int terminated_shmid = shmget(IPC_PRIVATE, sizeof(struct TerminatedQueue), 0666 | IPC_CREAT);
+    int terminated_shmid = shmget(IPC_PRIVATE, sizeof(struct completed_queue), 0666 | IPC_CREAT);
     if (terminated_shmid < 0) {
-        perror("shmget for terminated queue");
+        printf("Error creating shared memory for terminated queue with shmget");
+        printf("\n");
         exit(1);
     }
 
-    terminated_queue = shmat(terminated_shmid, NULL, 0);
+    finished_queue = shmat(terminated_shmid, NULL, 0);
 
-    if (terminated_queue == (void*) -1) {
+    if (finished_queue == (void*) -1) {
         perror("shmat for terminated queue");
         exit(1);
     }
-    terminated_queue->rear = -1;
-    
+    finished_queue->rear = -1;
 
     // Fork the SimpleScheduler process
     pid_t scheduler_pid = fork();
     if (scheduler_pid == -1) {
-        perror("fork");
+        printf("error in the SimpleScheduler process");
+        printf("\n");
         exit(1);
     }
-    if (scheduler_pid == 0) {
+    else if (scheduler_pid == 0) {
         // Child process (SimpleScheduler)
         struct timespec ts;
         ts.tv_sec = 0;
         ts.tv_nsec = TSLICE * 1000000; // TSLICE in microseconds
-        int k = 0;
+        int x = 0;
 
         // printf("Scheduler process is starting.\n
-        while (1) {
+        while (true) {
             // printf("Scheduler process is waiting for a signal.\n");
-            // sem_wait(&scheduler_sem); // Wait for a process to schedule
+            // sem_wait(&sem_sch); // Wait for a process to schedule
             // printf("Scheduler process received a signal.\n");
 
-            if (k > scheduler_queue->rear || k >= MAX_PROCESSES) {
-                k = 0;
+            if (x > ready_queue->rear || x >= MAXIMUM_PROCESSES) {
+                x = 0;
             }
-            k = 0;
+            x = 0;
             // Check if processes are waiting
             int processesToStart = NCPU;
             int flag = 0;
-            // printf("Queue rear: %d\n", scheduler_queue->rear);
-            // printf("processesToStart: %d\n", processesToStart);
-            // printf("Starting i: %d\n", i);
-            for (int i = k; i <= scheduler_queue->rear && processesToStart > 0; i++) {
-                //printf("Current i: %d\n", i);
-                if (scheduler_queue->processes[i].state == 1  && scheduler_queue->processes[i].priority == 1 && (flag == 0 || flag == 1)) {
-                    // Start a waiting process
-                    if (sem_wait(&print_sem) == -1) {
-                        perror("sem_wait (print_sem)");
+
+            int i = x; 
+            while (i <= ready_queue->rear && processesToStart > 0){
+                if (ready_queue->processes[i].process_state == 1 && 
+                ready_queue->processes[i].process_priority == 1 && (flag == 0 || flag == 1)){
+                    if (sem_wait(&sem_output) == -1){
+                        printf("sem_wait failed: %s\n", strerror(errno));
+                        printf("\n");
                     }
-                    //printf("Process with PID %d started execution with priority 1.\n", scheduler_queue->processes[i].pid);
-                    if (sem_post(&print_sem) == -1) {
-                        perror("sem_post (print_sem)");
+
+                    if (sem_post(&sem_output) == -1) {
+                        printf("sem_post failed: %s\n", strerror(errno));
+                        printf("\n");
                     }
-                    gettimeofday(&scheduler_queue->processes[i].start_time, NULL);
-                    kill(scheduler_queue->processes[i].pid, SIGCONT);
-                    scheduler_queue->processes[i].state = 0; // Set state to running
+                    gettimeofday(&ready_queue->processes[i].starting_time, NULL);
+                    kill(ready_queue->processes[i].process_id, SIGCONT);
+                    ready_queue->processes[i].process_state = 0; // Set process_state to running
                     processesToStart--;
                     flag = 1;
-                    k = i;
+                    x = i;
+
                 }
+                i++;
             }
-            for (int i = k; i <= scheduler_queue->rear && processesToStart > 0; i++) {
-                if (scheduler_queue->processes[i].state == 1  && scheduler_queue->processes[i].priority == 2 && (flag == 0 || flag == 2)) {
+
+            int j = x;
+
+            while (j <= ready_queue->rear && processesToStart > 0){
+                if (ready_queue->processes[j].process_state == 1 && 
+                ready_queue->processes[j].process_priority == 2 && (flag == 0 || flag == 2)){
                     // Start a waiting process
-                    if (sem_wait(&print_sem) == -1) {
-                        perror("sem_wait (print_sem)");
+                    if (sem_wait(&sem_output) == -1) {
+                        printf("sem_wait failed: %s\n", strerror(errno));
+                        printf("\n");
                     }
-                    //printf("Process with PID %d started execution with priority 2.\n", scheduler_queue->processes[i].pid);
-                    if (sem_post(&print_sem) == -1) {
-                        perror("sem_post (print_sem)");
+                    if (sem_post(&sem_output) == -1){
+                        printf("sem_post failed: %s\n", strerror(errno));
+                        printf("\n");
                     }
-                    gettimeofday(&scheduler_queue->processes[i].start_time, NULL);
-                    kill(scheduler_queue->processes[i].pid, SIGCONT);
-                    scheduler_queue->processes[i].state = 0; // Set state to running
+                    gettimeofday(&ready_queue->processes[j].starting_time, NULL);
+                    kill(ready_queue->processes[j].process_id, SIGCONT);
+                    ready_queue->processes[j].process_state = 0; // Set process_state to running
                     processesToStart--;
                     flag = 2;
-                    k = i;
+                    x = j;
                 }
+                j++;
             }
-            for (int i = k; i <= scheduler_queue->rear && processesToStart > 0; i++) {
-                if (scheduler_queue->processes[i].state == 1  && scheduler_queue->processes[i].priority == 3 && (flag == 0 || flag == 3)) {
-                    // Start a waiting process
-                    if (sem_wait(&print_sem) == -1) {
-                        perror("sem_wait (print_sem)");
+        
+
+            int k = x;
+            while (k <= ready_queue->rear && processesToStart > 0){
+                if (ready_queue->processes[k].process_state == 1 && 
+                ready_queue->processes[k].process_priority == 3 && (flag == 0 || flag == 3)){
+
+                    if (sem_wait(&sem_output) == -1) {
+                        printf("sem_wait failed: %s\n", strerror(errno));
+                        printf("\n");
                     }
-                    //printf("Process with PID %d started execution with priority 3.\n", scheduler_queue->processes[i].pid);
-                    if (sem_post(&print_sem) == -1) {
-                        perror("sem_post (print_sem)");
+                    if (sem_post(&sem_output) == -1) {
+                        perror("sem_post (sem_output)");
                     }
-                    gettimeofday(&scheduler_queue->processes[i].start_time, NULL);
-                    kill(scheduler_queue->processes[i].pid, SIGCONT);
-                    scheduler_queue->processes[i].state = 0; // Set state to running
+                    gettimeofday(&ready_queue->processes[k].starting_time, NULL);
+                    kill(ready_queue->processes[k].process_id, SIGCONT);
+                    ready_queue->processes[k].process_state = 0; // Set process_state to running
                     processesToStart--;
                     flag = 3;
-                    k = i;
+                    x = k;
                 }
+                k++; 
             }
-            for (int i = k; i <= scheduler_queue->rear && processesToStart > 0; i++) {
-                if (scheduler_queue->processes[i].state == 1  && scheduler_queue->processes[i].priority == 4 && (flag == 0 || flag == 4)) {
-                    // Start a waiting process
-                    if (sem_wait(&print_sem) == -1) {
-                        perror("sem_wait (print_sem)");
+
+        
+            int l = x;
+            while (l <= ready_queue->rear && processesToStart > 0){
+                if (ready_queue->processes[l].process_state == 1 && 
+                ready_queue->processes[l].process_priority == 4 && (flag == 0 || flag == 4)){
+                    if (sem_wait(&sem_output) == -1) {
+                        perror("sem_wait (sem_output)");
                     }
-                    //printf("Process with PID %d started execution with priority 4.\n", scheduler_queue->processes[i].pid);
-                    if (sem_post(&print_sem) == -1) {
-                        perror("sem_post (print_sem)");
+                
+                    if (sem_post(&sem_output) == -1) {
+                        perror("sem_post (sem_output)");
                     }
-                    gettimeofday(&scheduler_queue->processes[i].start_time, NULL);
-                    kill(scheduler_queue->processes[i].pid, SIGCONT);
-                    scheduler_queue->processes[i].state = 0; // Set state to running
+
+                    gettimeofday(&ready_queue->processes[l].starting_time, NULL);
+                    kill(ready_queue->processes[l].process_id, SIGCONT);
+                    ready_queue->processes[l].process_state = 0; // Set process_state to running
                     processesToStart--;
                     flag = 4;
-                    k = i;
+                    x = l;
                 }
+                l++;
             }
-            //printf("Scheduler process going for sleeping.\n");
+           
             // Sleep for TSLICE
             int t = TSLICE;
             if (flag != 0){
-                t = TSLICE/flag;
+                t = TSLICE/flag; //Scheduler process going for sleeping
             }
             usleep(t * 1000);
-            //printf("Scheduler process woke up after sleeping, flag = %d, tslice = %d.\n", flag, t);
+            int y = 0;
 
-            // Stop running processes
-            for (int j = 0; j <= scheduler_queue->rear; j++) {
-                if (scheduler_queue->processes[j].state == 0) {
-                    if (sem_wait(&print_sem) == -1) {
-                        perror("sem_wait (print_sem)");
+            while (y <= ready_queue->rear){
+
+                if (ready_queue->processes[y].process_state == 0){
+                    if (sem_wait(&sem_output) == -1) {
+                        printf("sem_wait failed: %s\n", strerror(errno));
+                        printf("\n");
                     }
-                    //printf("Process with PID %d stopped execution.\n", scheduler_queue->processes[j].pid);
-                    if (sem_post(&print_sem) == -1) {
-                        perror("sem_post (print_sem)");
+
+                    if (sem_post(&sem_output) == -1) {
+                        printf("sem_post failed: %s\n", strerror(errno));
+                        printf("\n");
                     }
-                    if (kill(scheduler_queue->processes[j].pid, SIGSTOP) == -1) {
-                        perror("kill (SIGSTOP)");
+
+                    if (kill(ready_queue->processes[y].process_id, SIGSTOP) == -1) {
+                        printf("kill (SIGSTOP) failed: %s\n", strerror(errno));
+                        printf("\n");
                     }
-                    gettimeofday(&scheduler_queue->processes[j].end_time, NULL);
-                    struct timeval elapsedTime;
-                    elapsedTime.tv_sec = scheduler_queue->processes[j].end_time.tv_sec - scheduler_queue->processes[j].start_time.tv_sec;
-                    elapsedTime.tv_usec = scheduler_queue->processes[j].end_time.tv_usec - scheduler_queue->processes[j].start_time.tv_usec;
-                    long long elapsed = elapsedTime.tv_sec * 1000 + elapsedTime.tv_usec / 1000;
-                    scheduler_queue->processes[j].total_execution_time += elapsed;
-                    scheduler_queue->processes[j].waiting_time += (scheduler_queue->rear -1)* TSLICE;
-                    scheduler_queue->processes[j].state = 1; // Set state to waiting
+                    gettimeofday(&ready_queue->processes[y].ending_time, NULL);
+
+                    long endingSeconds = ready_queue->processes[y].ending_time.tv_sec;
+                    long startingSeconds = ready_queue->processes[y].starting_time.tv_sec;
+                    long durationSeconds = endingSeconds - startingSeconds;
+
+                    long endingMicroseconds = ready_queue->processes[y].ending_time.tv_usec;
+                    long startingMicroseconds = ready_queue->processes[y].starting_time.tv_usec;
+                    long durationMicroseconds = endingMicroseconds - startingMicroseconds;
+
+                    long long elapsed = (durationSeconds * 1000) + (durationMicroseconds / 1000);
+
+                    ready_queue->processes[y].exec_time += elapsed;
+                    ready_queue->processes[y].wait_time += (ready_queue->rear - 1) * TSLICE;
+                    ready_queue->processes[y].process_state = 1; // Set process_state to waiting
                 }
+                y++;
             }
         }
+    } 
 
-    } else {
+    else {
         // Parent process (SimpleShell)
-        shell_queue.rear = -1;
+        input_queue.rear = -1;
 
-        while (1) {
-            char command[MAX_PROGRAM_NAME];
-            printf("\nSimpleShell$ ");
-            scanf("%s", command);
+        while (true) {
+            char program_name[MAX_PROGRAM_NAMES];
+            printf("\nSimpleShell>>>");
+            scanf("%s", program_name);
 
-            if (strcmp(command, "exit") == 0) {
+            if (strcmp(program_name, "exit") == 0) {
                 // Exit the shell
                 break;
-            } else if (strcmp(command, "submit") == 0) {
+            } else if (strcmp(program_name, "submit") == 0) {
                 // User submits a program
-                char program[MAX_PROGRAM_NAME];
-                int prior = 1; // Default priority is 1
+                char program[MAX_PROGRAM_NAMES];
+                int prior = 1; // Default process_priority is 1
                 // Try to read the program name
                 scanf("%s", program);
            
-                // Try to read the priority if available
+                // Try to read the process_priority if available
                 if (scanf("%d", &prior) != 1) {
                     // Priority was not entered, so it remains as 1
                     prior = 1;
                 }
                 if (prior < 1 || prior > 4) {
-                    printf("Invalid priority. Priority must be between 1 and 4.\n");
+                    printf("priority must be between 1 and 4");
+                    printf("\n");
                     prior = 1;
                     continue;
                 }
-
-                // Now you can use 'program' and 'prior' as needed.
-                //printf("Program: %s, Priority: %d\n", program, prior);
 
                 pid_t child_pid = fork();
                 if (child_pid == -1) {
                     perror("fork");
                     continue;
                 }
-                // int pid=atoi(program);
+                // int process_id=atoi(program);
                 int piD = get_pid_by_name(program);
                 if (child_pid == 0) {
                     // Child process
@@ -429,16 +504,16 @@ int main() {
                 } else {
                     // Parent process (shell)
                     struct Process new_process;
-                    new_process.pid = child_pid;
-                    strcpy(new_process.command, program);
-                    new_process.priority=prior;
-                    new_process.state = 1; // Set state to waiting
-                    new_process.total_execution_time = 0; // Set initial execution time = 0
-                    new_process.waiting_time = TSLICE; // Initialize waiting time to 0
-                    if (scheduler_queue->rear < MAX_PROCESSES - 1) {
-                        scheduler_queue->rear++;
-                        enqueue(scheduler_queue, new_process);
-                        kill(new_process.pid,SIGSTOP);
+                    new_process.process_id = child_pid;
+                    strcpy(new_process.program_name, program);
+                    new_process.process_priority=prior;
+                    new_process.process_state = 1; // Set process_state to waiting
+                    new_process.exec_time = 0; // Set initial execution time = 0
+                    new_process.wait_time = TSLICE; // Initialize waiting time to 0
+                    if (ready_queue->rear < MAXIMUM_PROCESSES - 1) {
+                        ready_queue->rear++;
+                        enqueue(ready_queue, new_process);
+                        kill(new_process.process_id,SIGSTOP);
 
                         // Send SIGUSR1 to the scheduler to wake it up
                         if (kill(scheduler_pid, SIGUSR1) == -1) {
@@ -450,61 +525,61 @@ int main() {
                 }
             } else {
                 // Execute other commands or system commands
-                if (system(command) == -1) {
+                if (system(program_name) == -1) {
                     perror("system");
                 }
             }
         }
 
         // Wait for child processes to complete
-        while (shell_queue.rear >= 0) {
+        while (input_queue.rear >= 0) {
             int status;
-            pid_t pid = wait(&status);
-            if (pid == -1) {
+            pid_t process_id = wait(&status);
+            if (process_id == -1) {
                 // No more child processes to wait for
                 break;
             }
-            for (int i = 0; i <= shell_queue.rear; i++) {
-                if (shell_queue.processes[i].pid == pid) {
-                    if (sem_wait(&print_sem) == -1) {
-                        perror("sem_wait (print_sem)");
+            for (int i = 0; i <= input_queue.rear; i++) {
+                if (input_queue.processes[i].process_id == process_id) {
+                    if (sem_wait(& sem_output) == -1) {
+                        perror("sem_wait ( sem_output)");
                     }
-                    printf("Process with PID %d finished execution. Execution Time: %lld ms\n", pid, shell_queue.processes[i].total_execution_time);
-                    if (sem_post(&print_sem) == -1) {
-                        perror("sem_post (print_sem)");
+                    printf("Process with PID %d finished execution. Execution Time: %lld ms\n", process_id, input_queue.processes[i].exec_time);
+                    if (sem_post(& sem_output) == -1) {
+                        perror("sem_post ( sem_output)");
                     }
-                    shell_queue.processes[i].state = -1; // Set state to finished
-                    gettimeofday(&shell_queue.processes[i].end_time, NULL);
-                    struct timeval elapsedTime;
-                    elapsedTime.tv_sec = shell_queue.processes[i].end_time.tv_sec - shell_queue.processes[i].start_time.tv_sec;
-                    elapsedTime.tv_usec = shell_queue.processes[i].end_time.tv_usec - shell_queue.processes[i].start_time.tv_usec;
-                    long long elapsed = elapsedTime.tv_sec * 1000 + elapsedTime.tv_usec / 1000;
-                    shell_queue.processes[i].total_execution_time += elapsed;
+                    input_queue.processes[i].process_state = -1; // Set process_state to finished
+                    gettimeofday(&input_queue.processes[i].ending_time, NULL);
+                    struct timeval duration;
+                    duration.tv_sec = input_queue.processes[i].ending_time.tv_sec - input_queue.processes[i].starting_time.tv_sec;
+                    duration.tv_usec = input_queue.processes[i].ending_time.tv_usec - input_queue.processes[i].starting_time.tv_usec;
+                    long long elapsed = duration.tv_sec * 1000 + duration.tv_usec / 1000;
+                    input_queue.processes[i].exec_time += elapsed;
                    
                 }
             }
         }
-        printTerminatedQueue(terminated_queue);
+        printCompletedQueue(finished_queue);
         exit(0);
     }
-    printTerminatedQueue(terminated_queue);
+    printCompletedQueue(finished_queue);
     // Clean up shared memory
-    if (shmdt(scheduler_queue) == -1) {
-        perror("shmdt (scheduler_queue)");
+    if (shmdt(ready_queue) == -1) {
+        perror("shmdt (ready_queue)");
     }
-    if (shmctl(shmid, IPC_RMID, NULL) == -1) {
-        perror("shmctl (scheduler_queue)");
+    if (shmctl(share_memoryid, IPC_RMID, NULL) == -1) {
+        perror("shmctl (ready_queue)");
     }
 
     // Destroy semaphores
-    if (sem_destroy(&scheduler_sem) == -1) {
-        perror("sem_destroy (scheduler_sem)");
+    if (sem_destroy(&sem_sch) == -1) {
+        perror("sem_destroy (sem_sch)");
     }
-    if (sem_destroy(&print_sem) == -1) {
-        perror("sem_destroy (print_sem)");
+    if (sem_destroy(& sem_output) == -1) {
+        perror("sem_destroy ( sem_output)");
     }
-    if (sem_destroy(&scheduler_queue_sem) == -1) {
-        perror("sem_destroy (scheduler_queue_sem)");
+    if (sem_destroy(&sem_sch_queue) == -1) {
+        perror("sem_destroy (sem_sch_queue)");
     }
     exit(0);
     return 0;
