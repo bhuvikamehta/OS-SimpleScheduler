@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <limits.h>
+#include <sys/syslimits.h>
 
 #define MAX_PROCESSES 100
 #define MAX_PROGRAM_NAME 256
@@ -40,7 +41,19 @@ struct Process {
     long long total_execution_time;
     long long waiting_time;
     int priority;
+    int quantum_count;
+    int preemption_count;
+    double priority_boost_effect;
 };
+
+// summary statistics struct
+struct SystemStats {
+    int total_jobs;
+    double avg_wait_time;
+    double avg_runtime;
+    double avg_quantum_usage;
+    int priority_counts[4];
+}; 
 
 // Struct to represent a queue of processes
 struct ProcessQueue {
@@ -56,7 +69,15 @@ struct TerminatedQueue {
 };
 
 
-
+void print_process_statistics(struct Process* process){
+    printf("Process Statistics: \n");
+    printf("Command: %s\n", process->command);
+    printf("PID: %d\n", process->pid);
+    printf("Priority: %d\n",process->priority);
+    printf("Total Runtime: %.2f ms\n",(float)process->total_execution_time);
+    printf("Waiting Time: %.2f ms\n",(float)process->waiting_time);
+    printf("Preemption Count: %d\n\n",process->preemption_count);
+}
 
 // Function to enqueue a process in the queue
 void enqueue(struct ProcessQueue* queue, struct Process process) {
@@ -78,9 +99,12 @@ void printTerminatedQueue(struct TerminatedQueue* queue) {
     for (int i = 0; i <= queue->rear; i++) {
 
         int waiting_time = ((queue->processes[i].end_time.tv_sec - queue->processes[i].start_time.tv_sec) * 1000) + ((queue->processes[i].end_time.tv_usec - queue->processes[i].start_time.tv_usec) / 1000);
-        printf("Terminated process %s with PID: %d \n Execution Time: %lld ms \n Waiting Time: %lld \n",
-            queue->processes[i].command,queue->processes[i].pid,queue->processes[i].total_execution_time, queue->processes[i].waiting_time);
+        // printf("Terminated process %s \nPID: %d \nExecution Time: %lld ms \nWaiting Time: %lld \n",
+        //     queue->processes[i].command,queue->processes[i].pid,queue->processes[i].total_execution_time, queue->processes[i].waiting_time);
+     
         // printf("Terminated Process with PID %d. Execution Time: %lld ms and %lld ms waiting time\n", queue->processes[i].pid, queue->processes[i].total_execution_time, queue->processes[i].waiting_time);
+
+        print_process_statistics(&queue->processes[i]);
     }
 }
 
@@ -102,7 +126,7 @@ static void manage_SIGINT(int sig_id){
     //     printf("\n");
     //     i++;
     // }
-    // printTerminatedQueue(terminated_queue);
+    printTerminatedQueue(terminated_queue);
     exit(0); //exits after showing detials 
 }
 
@@ -174,6 +198,17 @@ int get_pid_by_name(const char *name) {
 
     closedir(proc);
     return -1; // Process not found
+}
+
+void trim_whitespace(char* str) {
+    char* end;
+    // Trim leading space
+    while(isspace((unsigned char)*str)) str++;
+    if(*str == 0) return;
+    // Trim trailing space
+    end = str + strlen(str) - 1;
+    while(end > str && isspace((unsigned char)*end)) end--;
+    end[1] = '\0';
 }
 
 
@@ -360,6 +395,13 @@ int main() {
                     if (sem_wait(&print_sem) == -1) {
                         perror("sem_wait (print_sem)");
                     }
+                    scheduler_queue->processes[j].quantum_count++;
+                    scheduler_queue->processes[j].preemption_count++;
+
+                    double base_quantum = TSLICE;
+                    double actual_quantum = TSLICE / scheduler_queue->processes[j].priority;
+                    scheduler_queue->processes[j].priority_boost_effect = ((base_quantum - actual_quantum) / base_quantum) * 100;
+
                     //printf("Process with PID %d stopped execution.\n", scheduler_queue->processes[j].pid);
                     if (sem_post(&print_sem) == -1) {
                         perror("sem_post (print_sem)");
@@ -382,35 +424,80 @@ int main() {
     } else {
         // Parent process (SimpleShell)
         shell_queue.rear = -1;
+        char input[MAX_PROGRAM_NAME * 2];
+        char *command, *program, *priority_str;
+        printf("starting simpleshell with %d CPUs and %d ms time slice\n", NCPU, TSLICE);
 
         while (1) {
-            char command[MAX_PROGRAM_NAME];
-            printf("\nSimpleShell$ ");
-            scanf("%s", command);
+            // char command[MAX_PROGRAM_NAME];
+            printf("\nSimpleShell>>> ");
+            if (fgets(input, sizeof(input), stdin) == NULL) {
+                break;
+            }
+            // scanf("%s", command);
+            // Remove newline character
+            input[strcspn(input, "\n")] = 0;
+
+            // Tokenize input
+            command = strtok(input, " ");
+            if (command == NULL) continue;
+
+            trim_whitespace(command);
 
             if (strcmp(command, "exit") == 0) {
+                printTerminatedQueue(terminated_queue);
                 // Exit the shell
                 break;
             } else if (strcmp(command, "submit") == 0) {
                 // User submits a program
-                char program[MAX_PROGRAM_NAME];
-                int prior = 1; // Default priority is 1
+                // char program[MAX_PROGRAM_NAME];
+                // int prior = 1; // Default priority is 1
                 // Try to read the program name
-                scanf("%s", program);
+                // scanf("%s", program);
            
-                // Try to read the priority if available
-                if (scanf("%d", &prior) != 1) {
-                    // Priority was not entered, so it remains as 1
-                    prior = 1;
-                }
-                if (prior < 1 || prior > 4) {
-                    printf("Invalid priority. Priority must be between 1 and 4.\n");
-                    prior = 1;
-                    continue;
-                }
+                // // Try to read the priority if available
+                // if (scanf("%d", &prior) != 1) {
+                //     // Priority was not entered, so it remains as 1
+                //     prior = 1;
+                // }
+                // if (prior < 1 || prior > 4) {
+                //     printf("Invalid priority. Priority must be between 1 and 4.\n");
+                //     prior = 1;
+                //     continue;
+                // }
 
                 // Now you can use 'program' and 'prior' as needed.
                 //printf("Program: %s, Priority: %d\n", program, prior);
+
+                program = strtok(NULL, " ");
+                if (program == NULL) {
+                    printf("Error: No program specified\n");
+                    continue;
+                }
+            
+                // Get priority if specified
+                priority_str = strtok(NULL, " ");
+                int priority = 1; // default priority
+            
+                if (priority_str != NULL) {
+                    priority = atoi(priority_str);
+                    if (priority < 1 || priority > 4) {
+                        printf("Invalid priority (1-4). Using default priority 1\n");
+                        priority = 1;
+                    }
+                }
+
+                // Remove ./ if present at the start of program name
+                if (strncmp(program, "./", 2) == 0) {
+                    program += 2;
+                }
+
+                // Check if file exists and is executable
+                if (access(program, X_OK) == -1) {
+                    printf("Error: Program '%s' not found or not executable\n", program);
+                    continue;
+                }
+
 
                 pid_t child_pid = fork();
                 if (child_pid == -1) {
@@ -430,14 +517,24 @@ int main() {
                     // Parent process (shell)
                     struct Process new_process;
                     new_process.pid = child_pid;
-                    strcpy(new_process.command, program);
-                    new_process.priority=prior;
+                    strncpy(new_process.command, program,MAX_PROGRAM_NAME-1);
+                    new_process.priority=priority;
                     new_process.state = 1; // Set state to waiting
                     new_process.total_execution_time = 0; // Set initial execution time = 0
                     new_process.waiting_time = TSLICE; // Initialize waiting time to 0
+                    new_process.quantum_count=0;
+                    new_process.preemption_count=0;
+                    gettimeofday(&new_process.start_time,NULL);
+
+                    // Add to scheduler queue
+                    if (sem_wait(&scheduler_queue_sem) == -1) {
+                        perror("sem_wait (scheduler_queue_sem)");
+                    }
+
                     if (scheduler_queue->rear < MAX_PROCESSES - 1) {
                         scheduler_queue->rear++;
-                        enqueue(scheduler_queue, new_process);
+                        scheduler_queue->processes[scheduler_queue->rear] = new_process;     
+                        printf("submitted job with pid: %d\n",child_pid);                   
                         kill(new_process.pid,SIGSTOP);
 
                         // Send SIGUSR1 to the scheduler to wake it up
