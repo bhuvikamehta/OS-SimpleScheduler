@@ -13,7 +13,6 @@
 #include <errno.h>
 #include <dirent.h>
 #include <limits.h>
-#include <sys/syslimits.h>
 
 #define MAX_PROCESSES 100
 #define MAX_PROGRAM_NAME 256
@@ -81,7 +80,7 @@ void printTerminatedQueue(struct TerminatedQueue* queue) {
         int waiting_time = ((queue->processes[i].end_time.tv_sec - queue->processes[i].start_time.tv_sec) * 1000) + ((queue->processes[i].end_time.tv_usec - queue->processes[i].start_time.tv_usec) / 1000);
         printf("Terminated process %s with PID: %d \n Execution Time: %lld ms \n Waiting Time: %lld \n",
             queue->processes[i].command,queue->processes[i].pid,queue->processes[i].total_execution_time, queue->processes[i].waiting_time);
-        printf("Terminated Process with PID %d. Execution Time: %lld ms and %lld ms waiting time\n", queue->processes[i].pid, queue->processes[i].total_execution_time, queue->processes[i].waiting_time);
+        // printf("Terminated Process with PID %d. Execution Time: %lld ms and %lld ms waiting time\n", queue->processes[i].pid, queue->processes[i].total_execution_time, queue->processes[i].waiting_time);
     }
 }
 
