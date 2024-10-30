@@ -1,4 +1,4 @@
-#include <stdio.h>
+#include <stdio.h>  
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -13,24 +13,24 @@
 #include <semaphore.h>
 #include <sys/time.h>
 
-#define MAX_PROCESSES 100
+#define MAXIMUM_PROCESSES 100
 #define MAXIMUM_COMMANDS 256
-#define MSGQ_KEY 12345
+#define MESSAGE_QUEUEKEY 12345
 
-// Process states
+// process states 
 #define STATE_CREATED 0
 #define STATE_READY 1
 #define STATE_RUNNING 2
 #define STATE_FINISHED 3
 
-// Message structure for IPC
+// message structure for IPC
 struct message_buffer {
     long message_type;
     char command[MAXIMUM_COMMANDS];
     int priority;
 } message;
 
-// PCB structure
+// PCB structure to store proccess details 
 typedef struct {
     pid_t pid;
     char name[MAXIMUM_COMMANDS];
@@ -44,7 +44,7 @@ typedef struct {
 
 // Ready Queue implementation with priority
 typedef struct {
-    PCB *processes[MAX_PROCESSES];
+    PCB *processes[MAXIMUM_PROCESSES];
     int count;
 } ReadyQueue;
 
@@ -53,48 +53,52 @@ int message_queueid;
 int NCPU;
 int TSLICE;
 int total_processes = 0;
-PCB *process_table[MAX_PROCESSES];
+PCB *process_table[MAXIMUM_PROCESSES];
 volatile sig_atomic_t should_exit = 0;
 volatile sig_atomic_t start_execution = 0;
 
 
-// Global variables for tracking process state
+
 typedef struct {
+    //tracking process state
     int state;
-    struct timeval start_time;
+    struct timeval start_time;  
     struct timeval end_time;
     long long total_execution_time;
     long long waiting_time;
     pid_t pid;
     char name[256];
     int priority;
-} ProcessInfo;
+} taskinfo;
 
 typedef struct {
-    ProcessInfo processes[MAX_PROCESSES];
+    taskinfo processes[MAXIMUM_PROCESSES];
     int rear;
-} ProcessQueue;
+} process_queue;
 
-ProcessQueue *scheduler_queue;
-ProcessQueue *terminated_queue;
+process_queue *scheduler_queue;
+process_queue *terminated_queue;
 sem_t scheduler_queue_sem;
 
 // Initialize the queues
 void init_queues() {
-    scheduler_queue = malloc(sizeof(ProcessQueue));
-    terminated_queue = malloc(sizeof(ProcessQueue));
+    scheduler_queue = malloc(sizeof(process_queue));
     scheduler_queue->rear = -1;
+    terminated_queue = malloc(sizeof(process_queue));
     terminated_queue->rear = -1;
     sem_init(&scheduler_queue_sem, 0, 1);
 }
 
 void print_process_stats() {
     
-    printf("PID\tName\t\tPriority\tExecution Time(ms)\tWaiting Time(ms)\n");
-    printf("------------------------------------------------------------------------\n");
+    printf("\n");
+    printf("P_id\tname\t\tpriority\texecution time\twaiting time");
+    printf("\n");
+    printf("------------------------------------------------------------------------");
+    printf("\n");
     
     for (int i = 0; i <= terminated_queue->rear; i++) {
-        ProcessInfo *proc = &terminated_queue->processes[i];
+        taskinfo *proc = &terminated_queue->processes[i];
         printf("%d\t%-15s\t%d\t\t%lld\t\t\t%lld\n",
                proc->pid,
                proc->name,
@@ -115,12 +119,10 @@ void manage_SIGCHLD(int signo) {
         // Find and update the finished process
         for (int i = 0; i <= scheduler_queue->rear; i++) {
             if (scheduler_queue->processes[i].pid == pid) {
-                // Mark as finished and calculate times
                 scheduler_queue->processes[i].state = -1;
-                gettimeofday(&scheduler_queue->processes[i].end_time, NULL);
+                gettimeofday(&scheduler_queue->processes[i].end_time, NULL); // calculate times
                 
-                // Calculate execution time
-                struct timeval elapsed;
+                struct timeval elapsed; //execution time
                 timersub(&scheduler_queue->processes[i].end_time, 
                         &scheduler_queue->processes[i].start_time, 
                         &elapsed);
@@ -145,6 +147,7 @@ void manage_SIGCHLD(int signo) {
     }
 }
 
+
 void manage_SIGINT(int signo) {
     print_process_stats();
     
@@ -160,33 +163,24 @@ void signal_handler(int signum) {
         should_exit = 1;
     } else if (signum == SIGUSR1) {
         start_execution = 1;
-        //printf("Received start signal. Beginning execution...\n");
     }
 }
 void manage_SIGUSR1(int signo) {
     
     sem_wait(&scheduler_queue_sem);
     
-    // Resume all stopped processes
     for (int i = 0; i <= scheduler_queue->rear; i++) {
-        if (scheduler_queue->processes[i].state != -1) {
+        if (scheduler_queue->processes[i].state != -1) {             // resume all stopped processes
             kill(scheduler_queue->processes[i].pid, SIGCONT);
-            gettimeofday(&scheduler_queue->processes[i].start_time, NULL);
+            gettimeofday(&scheduler_queue->processes[i].start_time, NULL); 
         }
     }
     
     sem_post(&scheduler_queue_sem);
 }
 
-void initialize_queue() {
-    ready_queue.count = 0;
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        ready_queue.processes[i] = NULL;
-    }
-}
-
 void enqueue(PCB *process) {
-    if (ready_queue.count >= MAX_PROCESSES) return;
+    if (ready_queue.count >= MAXIMUM_PROCESSES) return;
     
     int i = ready_queue.count - 1;
     while (i >= 0 && ready_queue.processes[i]->priority < process->priority) {
@@ -287,7 +281,7 @@ void free_resource() {
         msgctl(message_queueid, IPC_RMID, NULL);
     }
 }
-void schedule_processes() {
+void RoundRobin() {
     if (!start_execution) return; 
     
     int status;
@@ -297,10 +291,9 @@ void schedule_processes() {
         handle_finished_process(finished_pid);
     }
 
-    // Stop currently running processes and update their stats
     int i = 0;
-    while (i < total_processes) {
-        if (process_table[i] != NULL && process_table[i]->is_running) {
+    while (i < total_processes) {       //stop running processes
+        if (process_table[i] != NULL && process_table[i]->is_running) {             //update their state
             kill(process_table[i]->pid, SIGSTOP);
             process_table[i]->is_running = 0;
             if (process_table[i]->state != STATE_FINISHED) {
@@ -312,8 +305,7 @@ void schedule_processes() {
         i++; 
     }
 
-    // Start new processes
-    int running_processes = 0;
+    int running_processes = 0;                  //new process
     while (running_processes < NCPU && ready_queue.count > 0) {
         PCB *current = dequeue();
         if (current && current->state != STATE_FINISHED) {
@@ -324,12 +316,12 @@ void schedule_processes() {
         }
     }
 
-    // Update wait times
-    int j = 0; 
+    
+    int j = 0;                                      
     while (j < total_processes) {
         if (process_table[j] != NULL) {
             if (process_table[j]->state != STATE_FINISHED && !process_table[j]->is_running){
-                process_table[j]->total_wait_time++; 
+                process_table[j]->total_wait_time++;                    //wait time
             }
         }
     j++; 
@@ -358,9 +350,12 @@ int main(int argc, char *argv[]) {
     NCPU = atoi(argv[1]);
     TSLICE = atoi(argv[2]);
     
-    initialize_queue();
+    ready_queue.count = 0;
+    for (int i = 0; i < MAXIMUM_PROCESSES; i++) {
+        ready_queue.processes[i] = NULL;
+    }
     
-    message_queueid = msgget(MSGQ_KEY, 0666 | IPC_CREAT);
+    message_queueid = msgget(MESSAGE_QUEUEKEY, 0666 | IPC_CREAT);
     if (message_queueid == -1) {
         printf("message queue cannot be created");
         printf("\n");
@@ -404,9 +399,6 @@ int main(int argc, char *argv[]) {
                 scheduler_queue->processes[scheduler_queue->rear].state = 0;
                 sem_post(&scheduler_queue_sem);
 
-                char *command_name = basename(message.command);
-                printf("process submitted: ");
-                printf("%s ", command_name);
                 printf("(pid: %d, ", pid);
                 printf("priority: %d)\n", message.priority);
                 
@@ -417,7 +409,7 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        schedule_processes();
+        RoundRobin();
         usleep(TSLICE * 1000);
     }
 
