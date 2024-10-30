@@ -11,7 +11,7 @@
 #include <errno.h>
 
 #define MAXIMUM_COMMANDS 256
-#define MSGQ_KEY 12345
+#define MESSAGE_QUEUEKEY 12345
 
 struct message_buffer {
     long message_type;
@@ -25,7 +25,6 @@ volatile sig_atomic_t exit_flag = 0;
 
 void signal_handler(int signum) {
     if (signum == SIGINT) {
-        //printf("\nReceived SIGINT, shutting down...\n");
         exit_flag = 1;
         if (scheduler_processid > 0) {
             kill(scheduler_processid, SIGTERM);
@@ -43,48 +42,50 @@ void free_resource() {
     }
 }
 
-char* get_scheduler_path() {
+char* retieve_schedular() {
     static char path[MAXIMUM_COMMANDS];
-    char *dir = dirname(realpath("/proc/self/exe", NULL));
-    snprintf(path, sizeof(path), "%s/scheduler", dir);
+    char *directory = dirname(realpath("/proc/self/exe", NULL));
+    snprintf(path, sizeof(path), "%s/scheduler", directory);
     return path;
 }
 
 void launch_scheduler(int NCPU, int TSLICE) {
-    char *scheduler_path = get_scheduler_path();
+    char *scheduler_path = retieve_schedular();
     
-    // Check if scheduler exists
+    //Check if scheduler exists
     if (access(scheduler_path, X_OK) != 0) {
-        printf("Error: Cannot find scheduler executable at %s\n", scheduler_path);
-        printf("Error details: %s\n", strerror(errno));
+        printf("scheduler path not exits");
+        printf("\n");
+        printf("error: %s\n", strerror(errno));
         exit(1);
     }
 
     pid_t pid = fork();
-    if (pid == 0) {
-        // Child process
-        char ncpu_str[10], tslice_str[10];
-        sprintf(ncpu_str, "%d", NCPU);
-        sprintf(tslice_str, "%d", TSLICE);
-        
-        if (execl(scheduler_path, scheduler_path, ncpu_str, tslice_str, NULL) == -1) {
-            printf("Error executing scheduler: %s\n", strerror(errno));
-            exit(1);
-        }
-    } else if (pid > 0) {
-        // Parent process
-        scheduler_processid = pid;
-        usleep(100000); // 100ms delay for initialization
-        
-        // Verify scheduler is running
-        if (kill(scheduler_processid, 0) == -1) {
-            printf("Error: Scheduler failed to start\n");
-            exit(1);
-        }
-    } else {
-        // Fork failed
-        perror("Fork failed");
+    if (pid < 0) {
+        printf("Error in creating child process");
         exit(1);
+    } 
+    else if (pid == 0) {
+        char NCPU_str[10], TSLICE_str[10];
+        sprintf(NCPU_str, "%d", NCPU);
+        sprintf(TSLICE_str, "%d", TSLICE);
+    
+        if (execl(scheduler_path, scheduler_path, NCPU_str, TSLICE_str, NULL) == -1) {
+            printf("Error executing scheduler:\n");
+            printf("%s\n", strerror(errno));
+            exit(1);
+        }
+    } 
+    else {
+    
+        scheduler_processid = pid;
+        usleep(100000); 
+    
+        if (kill(scheduler_processid, 0) == -1) {           //check scheduler running
+            printf("Error in schedular starting");
+            printf("\n");
+            exit(1);
+        }
     }
 }
 
@@ -113,21 +114,15 @@ int main() {
     }
     getchar(); // Consume newline
 
-    // Create message queue
-    message_queueid = msgget(MSGQ_KEY, 0666 | IPC_CREAT);
-    if (message_queueid == -1) {
-        perror("msgget failed");
+    message_queueid = msgget(MESSAGE_QUEUEKEY, 0666 | IPC_CREAT);
+    if (message_queueid == -1) {                //message queue create
+        printf("Error in executing msgget");
         exit(1);
     }
 
     launch_scheduler(NCPU, TSLICE);
-   // printf("Scheduler launched with PID: %d\n", scheduler_processid);
-   // printf("Commands:\n");
-    // printf(" submit <program> [priority] - Submit a program\n");
-    // printf(" run - Start executing submitted programs\n");
-    // printf(" exit - Exit the shell\n");
 
-    while (!exit_flag) {
+    while (exit_flag==0) {
         printf("Simpleshell>>> ");
         fflush(stdout);
         
@@ -151,45 +146,55 @@ int main() {
             }
         } 
         else {
-            char *cmd = strtok(input, " ");
-            if (cmd && strcmp(cmd, "submit") == 0) {
+            char *token = strtok(input, " ");
+            if (token && strcmp(token, "submit") == 0) {
                 char *program = strtok(NULL, " ");
                 char *priority_str = strtok(NULL, " ");
 
                 if (program) {
-                    char abs_path[MAXIMUM_COMMANDS];
+                    char executable_path[MAXIMUM_COMMANDS];
                     if (program[0] != '/') {  // If not absolute path
-                        char cwd[MAXIMUM_COMMANDS];
-                        if (getcwd(cwd, sizeof(cwd)) != NULL) {
-                            int result = snprintf(abs_path, sizeof(abs_path), "%s/%s", cwd, program);
-                            if (result >= sizeof(abs_path)) {
-                                printf("Error: Path too long\n");
+                        char current_directory[MAXIMUM_COMMANDS];
+                        if (getcwd(current_directory, sizeof(current_directory)) != NULL) {
+                            int result = snprintf(executable_path, sizeof(executable_path), "%s/%s", current_directory, program);
+                            if (result >= sizeof(executable_path)) {
+                                printf("path is too long");
+                                printf("\n");
                                 continue;
                             }
-                        } else {
-                            perror("getcwd failed");
-                            continue;
-                        }  
-                    } else {
-                        size_t len = strlen(program);
-                        if (len >= sizeof(abs_path)) {
-                            printf("Error: Path too long\n");
-                            continue;
-                        }
-                        strncpy(abs_path, program, sizeof(abs_path)-1);
-                        abs_path[sizeof(abs_path)-1] = '\0';
-                    }
-
-                    if (access(abs_path, X_OK) == 0) {
-                        message.message_type = 1;
-                        strncpy(message.command, abs_path, MAXIMUM_COMMANDS-1);
-                        message.priority = (priority_str != NULL) ? atoi(priority_str) : 1;
-
-                        if (msgsnd(message_queueid, &message, sizeof(message)-sizeof(long), 0) == -1) {
-                            perror("msgsnd failed");
                         } 
                         else {
-                            printf("Submitted: %s with priority %d\n", program, message.priority);
+                            printf("cannot retrieve the current working directory");
+                            continue;
+                        }  
+                    } 
+                    else {
+                        size_t len = strlen(program);
+                        if (len >= sizeof(executable_path)) {
+                            printf("path is too long");
+                            printf("\n");
+                            continue;
+                        }
+                        strncpy(executable_path, program, sizeof(executable_path)-1);
+                        executable_path[sizeof(executable_path)-1] = '\0';
+                    }
+
+                    if (access(executable_path, X_OK) == 0) {
+                        message.message_type = 1;
+                        strncpy(message.command, executable_path, MAXIMUM_COMMANDS-1);
+                        if (priority_str != NULL){
+                            message.priority = atoi(priority_str);
+                        }
+                        else{
+                            message.priority = 1;
+                        }
+
+                        if (msgsnd(message_queueid, &message, sizeof(message)-sizeof(long), 0) == -1) {
+                            perror("error in msgsnd");
+                        } 
+                        else {
+                           printf("Submitted: %s\n", program);
+                           printf("with priority %d\n", message.priority);
                         }
                     } 
                     else {
@@ -197,17 +202,14 @@ int main() {
                         printf("Error details: %s\n", strerror(errno));
                     }
                 } 
-                else {
-                   // printf("Usage: submit <program> [priority]\n");
-                }
-            } else if (strlen(input) > 0) {
+            } 
+            else if (strlen(input) > 0) {
                 printf("Invalid command");
                 printf("\n");
             }
         }
     }
 
-    //printf("\nShutting down...\n");
     free_resource();
     return 0;
 }
