@@ -10,8 +10,10 @@
 #include <libgen.h>
 #include <errno.h>
 
-#define MAXIMUM_COMMANDS 256
-#define MESSAGE_QUEUEKEY 12345
+#define MAXIMUM_COMMANDS 512
+
+#define INPUT_BUFFER_SIZE 1024
+#define MESSAGE_QUEUEKEY 100
 
 struct message_buffer {
     long message_type;
