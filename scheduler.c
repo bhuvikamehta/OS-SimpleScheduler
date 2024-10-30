@@ -14,8 +14,10 @@
 #include <sys/time.h>
 
 #define MAXIMUM_PROCESSES 100
-#define MAXIMUM_COMMANDS 256
-#define MESSAGE_QUEUEKEY 12345
+#define MAXIMUM_COMMANDS 512
+
+#define INPUT_BUFFER_SIZE 1024
+#define MESSAGE_QUEUEKEY 100
 
 // process states 
 #define STATE_CREATED 0
