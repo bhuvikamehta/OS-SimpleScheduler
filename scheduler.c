@@ -9,7 +9,7 @@
 #include <signal.h>
 #include <time.h>
 #include <errno.h>
-#include <libgen.h> 
+#include <libgen.h>
 #include <semaphore.h>
 #include <sys/time.h>
 
@@ -19,7 +19,7 @@
 #define INPUT_BUFFER_SIZE 1024
 #define MESSAGE_QUEUEKEY 100
 
-// process states 
+// process states
 #define STATE_CREATED 0
 #define STATE_READY 1
 #define STATE_RUNNING 2
@@ -32,12 +32,13 @@ struct message_buffer {
     int priority;
 } message;
 
-// PCB structure to store proccess details 
+// PCB structure to store proccess details
 typedef struct {
     pid_t pid;
     char name[MAXIMUM_COMMANDS];
     int state;
     time_t start_time;
+   
     time_t total_exec_time;
     time_t total_wait_time;
     int priority;
@@ -92,21 +93,21 @@ void init_queues() {
 }
 
 void print_process_stats() {
-    
+   
     printf("\n");
     printf("P_id\tname\t\tpriority\texecution time\twaiting time");
     printf("\n");
     printf("------------------------------------------------------------------------");
     printf("\n");
-    
+   
     for (int i = 0; i <= terminated_queue->rear; i++) {
         taskinfo *proc = &terminated_queue->processes[i];
         printf("%d\t%-15s\t%d\t\t%lld\t\t\t%lld\n",
                proc->pid,
                proc->name,
                proc->priority,
-               proc->total_execution_time,
-               proc->waiting_time);
+               proc->total_execution_time*TSLICE,
+               proc->waiting_time*TSLICE);
     }
     printf("\n");
 }
@@ -123,17 +124,17 @@ void manage_SIGCHLD(int signo) {
             if (scheduler_queue->processes[i].pid == pid) {
                 scheduler_queue->processes[i].state = -1;
                 gettimeofday(&scheduler_queue->processes[i].end_time, NULL); // calculate times
-                
+               
                 struct timeval elapsed; //execution time
-                timersub(&scheduler_queue->processes[i].end_time, 
-                        &scheduler_queue->processes[i].start_time, 
+                timersub(&scheduler_queue->processes[i].end_time,
+                        &scheduler_queue->processes[i].start_time,
                         &elapsed);
                 long long exec_time = elapsed.tv_sec * 1000 + elapsed.tv_usec / 1000;
-                
+               
                 scheduler_queue->processes[i].total_execution_time = exec_time;
                 scheduler_queue->processes[i].waiting_time = exec_time;
 
-                
+               
                 terminated_queue->rear++;
                 terminated_queue->processes[terminated_queue->rear] = scheduler_queue->processes[i]; // move to terminated queue
 
@@ -144,7 +145,7 @@ void manage_SIGCHLD(int signo) {
                 break;
             }
         }
-        
+       
         sem_post(&scheduler_queue_sem);
     }
 }
@@ -152,7 +153,7 @@ void manage_SIGCHLD(int signo) {
 
 void manage_SIGINT(int signo) {
     print_process_stats();
-    
+   
     // Cleanup and exit
     sem_destroy(&scheduler_queue_sem);
     free(scheduler_queue);
@@ -168,22 +169,22 @@ void signal_handler(int signum) {
     }
 }
 void manage_SIGUSR1(int signo) {
-    
+    start_execution = 1;
     sem_wait(&scheduler_queue_sem);
-    
+   
     for (int i = 0; i <= scheduler_queue->rear; i++) {
         if (scheduler_queue->processes[i].state != -1) {             // resume all stopped processes
             kill(scheduler_queue->processes[i].pid, SIGCONT);
-            gettimeofday(&scheduler_queue->processes[i].start_time, NULL); 
+            gettimeofday(&scheduler_queue->processes[i].start_time, NULL);
         }
     }
-    
+   
     sem_post(&scheduler_queue_sem);
 }
 
 void enqueue(PCB *process) {
     if (ready_queue.count >= MAXIMUM_PROCESSES) return;
-    
+   
     int i = ready_queue.count - 1;
     while (i >= 0 && ready_queue.processes[i]->priority < process->priority) {
         ready_queue.processes[i + 1] = ready_queue.processes[i];
@@ -196,7 +197,7 @@ void enqueue(PCB *process) {
 PCB* dequeue() {
     if (ready_queue.count == 0) return NULL;
     PCB *process = ready_queue.processes[0];
-    
+   
     for (int i = 0; i < ready_queue.count - 1; i++) {
         ready_queue.processes[i] = ready_queue.processes[i + 1];
     }
@@ -213,34 +214,34 @@ void print_final_status() {
     printf("priority\n");
     printf("-------------------------------------------------------------------------");
     printf("\n");
-    
+   
     for (int i = 0; i < total_processes; i++) {
         if (process_table[i] != NULL) {
             const char* state_str;
-            
-            if (process_table[i]->state == STATE_CREATED) 
+           
+            if (process_table[i]->state == STATE_CREATED)
             {
-                state_str = "CREATED"; 
-            } 
-            else if (process_table[i]->state == STATE_READY) 
-            {
-                state_str = "READY"; 
-            } 
-            else if (process_table[i]->state == STATE_RUNNING) 
-            {
-                state_str = "RUNNING"; 
-            } 
-            else if (process_table[i]->state == STATE_FINISHED) {
-                state_str = "FINISHED"; 
-            } 
-            else {
-                state_str = "UNKNOWN"; 
+                state_str = "CREATED";
             }
-            
-            printf("%d\t", process_table[i]->pid); 
+            else if (process_table[i]->state == STATE_READY)
+            {
+                state_str = "READY";
+            }
+            else if (process_table[i]->state == STATE_RUNNING)
+            {
+                state_str = "RUNNING";
+            }
+            else if (process_table[i]->state == STATE_FINISHED) {
+                state_str = "FINISHED";
+            }
+            else {
+                state_str = "UNKNOWN";
+            }
+           
+            printf("%d\t", process_table[i]->pid);
             printf("%-15s\t", process_table[i]->name);  
-            printf("%-10s\t", state_str); 
-            printf("%ld ms\t\t", process_table[i]->total_exec_time * TSLICE); 
+            printf("%-10s\t", state_str);
+            printf("%ld ms\t\t", process_table[i]->total_exec_time * TSLICE);
             printf("%ld ms\t\t", process_table[i]->total_wait_time * TSLICE);  
             printf("%d\n", process_table[i]->priority);  
         }
@@ -249,14 +250,14 @@ void print_final_status() {
 }
 
 void handle_finished_process(pid_t pid) {
-    int i = 0; 
+    int i = 0;
     while (i < total_processes) {
         if (process_table[i] != NULL && process_table[i]->pid == pid) {
             process_table[i]->state = STATE_FINISHED;
             process_table[i]->is_running = 0;
-            break; 
+            break;
         }
-        i++; 
+        i++;
     }
 }
 
@@ -278,17 +279,17 @@ void free_resource() {
             free(process_table[i]);
         }       //cleaning up memory and message queue
     }
-    
+   
     if (message_queueid != -1) {
         msgctl(message_queueid, IPC_RMID, NULL);
     }
 }
 void RoundRobin() {
-    if (!start_execution) return; 
-    
+    if (!start_execution) return;
+   
     int status;
     pid_t finished_pid;
-    
+   
     while ((finished_pid = waitpid(-1, &status, WNOHANG)) > 0) {
         handle_finished_process(finished_pid);
     }
@@ -304,7 +305,7 @@ void RoundRobin() {
                 enqueue(process_table[i]);
             }
         }
-        i++; 
+        i++;
     }
 
     int running_processes = 0;                  //new process
@@ -318,7 +319,7 @@ void RoundRobin() {
         }
     }
 
-    
+   
     int j = 0;                                      
     while (j < total_processes) {
         if (process_table[j] != NULL) {
@@ -326,7 +327,7 @@ void RoundRobin() {
                 process_table[j]->total_wait_time++;                    //wait time
             }
         }
-    j++; 
+    j++;
     }
 
 }
@@ -351,12 +352,12 @@ int main(int argc, char *argv[]) {
 
     NCPU = atoi(argv[1]);
     TSLICE = atoi(argv[2]);
-    
+   
     ready_queue.count = 0;
     for (int i = 0; i < MAXIMUM_PROCESSES; i++) {
         ready_queue.processes[i] = NULL;
     }
-    
+   
     message_queueid = msgget(MESSAGE_QUEUEKEY, 0666 | IPC_CREAT);
     if (message_queueid == -1) {
         printf("message queue cannot be created");
@@ -380,15 +381,15 @@ int main(int argc, char *argv[]) {
             new_process->total_wait_time = 0;
             new_process->is_running = 0;
             new_process->start_time = time(NULL);
-            
+           
             pid_t pid = fork();
             if (pid == 0) {
                 signal(SIGINT, SIG_DFL);
                 signal(SIGTERM, SIG_DFL);
-                raise(SIGSTOP); 
+                raise(SIGSTOP);
                 execl(message.command, message.command, NULL);
                 exit(1);
-            } 
+            }
             else {
                 new_process->pid = pid;
                 process_table[total_processes++] = new_process;
@@ -403,7 +404,7 @@ int main(int argc, char *argv[]) {
 
                 printf("(pid: %d, ", pid);
                 printf("priority: %d)\n", message.priority);
-                
+               
                 int status;
                 waitpid(pid, &status, WUNTRACED);
                 new_process->state = STATE_READY;
