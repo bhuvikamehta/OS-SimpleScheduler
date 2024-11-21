@@ -1,4 +1,4 @@
-#include <stdio.h> 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -29,8 +29,14 @@ void signal_handler(int signum) {
     if (signum == SIGINT) {
         exit_flag = 1;
         if (scheduler_processid > 0) {
-            kill(scheduler_processid, SIGTERM);
+            kill(scheduler_processid, SIGINT);
+            int status;
+            waitpid(scheduler_processid, &status, 0);
         }
+        if (message_queueid != -1) {
+            msgctl(message_queueid, IPC_RMID, NULL);
+        }
+        exit(0);
     }
 }
 
@@ -53,7 +59,7 @@ char* retieve_schedular() {
 
 void launch_scheduler(int NCPU, int TSLICE) {
     char *scheduler_path = retieve_schedular();
-    
+   
     //Check if scheduler exists
     if (access(scheduler_path, X_OK) != 0) {
         printf("scheduler path not exits");
@@ -66,23 +72,23 @@ void launch_scheduler(int NCPU, int TSLICE) {
     if (pid < 0) {
         printf("Error in creating child process");
         exit(1);
-    } 
+    }
     else if (pid == 0) {
         char NCPU_str[10], TSLICE_str[10];
         sprintf(NCPU_str, "%d", NCPU);
         sprintf(TSLICE_str, "%d", TSLICE);
-    
+   
         if (execl(scheduler_path, scheduler_path, NCPU_str, TSLICE_str, NULL) == -1) {
             printf("Error executing scheduler:\n");
             printf("%s\n", strerror(errno));
             exit(1);
         }
-    } 
+    }
     else {
-    
+   
         scheduler_processid = pid;
-        usleep(100000); 
-    
+        usleep(100000);
+   
         if (kill(scheduler_processid, 0) == -1) {           //check scheduler running
             printf("Error in schedular starting");
             printf("\n");
@@ -127,7 +133,7 @@ int main() {
     while (exit_flag==0) {
         printf("Simpleshell>>> ");
         fflush(stdout);
-        
+       
         if (fgets(input, sizeof(input), stdin) == NULL) {
             break;
         }
@@ -136,17 +142,17 @@ int main() {
 
         if (strcmp(input, "exit") == 0) {
             exit_flag = 1;
-        } 
+        }
         else if (strcmp(input, "execute") == 0) {
             if (scheduler_processid > 0) {
-                if (kill(scheduler_processid, SIGUSR1) == 0) {} 
+                if (kill(scheduler_processid, SIGUSR1) == 0) {}
                 else {
                     printf("Signal can't sent to the Scheduler");
                     printf("Error %s",strerror(errno));
                     printf("\n");
                 }
             }
-        } 
+        }
         else {
             char *token = strtok(input, " ");
             if (token && strcmp(token, "submit") == 0) {
@@ -164,12 +170,12 @@ int main() {
                                 printf("\n");
                                 continue;
                             }
-                        } 
+                        }
                         else {
                             printf("cannot retrieve the current working directory");
                             continue;
                         }  
-                    } 
+                    }
                     else {
                         size_t len = strlen(program);
                         if (len >= sizeof(executable_path)) {
@@ -193,18 +199,18 @@ int main() {
 
                         if (msgsnd(message_queueid, &message, sizeof(message)-sizeof(long), 0) == -1) {
                             perror("error in msgsnd");
-                        } 
+                        }
                         else {
                            printf("Submitted: %s\n", program);
                            printf("with priority %d\n", message.priority);
                         }
-                    } 
+                    }
                     else {
                         printf("Error: %s is not executable or doesn't exist\n", program);
                         printf("Error details: %s\n", strerror(errno));
                     }
-                } 
-            } 
+                }
+            }
             else if (strlen(input) > 0) {
                 printf("Invalid command");
                 printf("\n");
